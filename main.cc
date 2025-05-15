@@ -9,11 +9,14 @@
 #include <arm_neon.h>
 #include <cstdlib>  
 #include <ctime> 
+#include <algorithm>
+#include <pthread.h>
 // 可以自行添加需要的头文件
 
 
 const int ROOT = 3;
 const int BITE = 63;
+const int NUM_THREADS = 4;
 // const int MOD = 998244353;
 
 
@@ -138,15 +141,131 @@ void ntt_multiply(int *a, int *b, int *ab, int n,int MOD) {
     ntt(ab,size,MOD, true);
 }
 
+
+struct ntt_arg{
+    int *a;
+    int *b;
+    int *ab;
+    int n;
+    int p; // 和MOD一样
+};
+
+void* pthread_ntt_multiply(void *arg) {
+    ntt_arg *narg = (ntt_arg *)arg;
+    int *a = narg->a;
+    int *b = narg->b;
+    int *ab = narg->ab;
+    int n = narg->n;
+    int MOD = narg->p;
+    int size=1;
+    while(size<2*n) size<<=1;
+    for(int i=n;i<size;i++) a[i]=b[i]=0;
+    ntt(a, size,MOD,false);
+    ntt(b,size,MOD, false);
+    for (int i = 0; i < size; i++) ab[i] = 1LL * a[i] * b[i] % MOD;
+    ntt(ab,size,MOD, true);
+}
+
+long long extend_gcd(long long a, long long b, long long &x, long long &y) {
+    if (b == 0) {
+        x = 1;
+        y = 0;
+        return a;
+    }
+    long long x1, y1;
+    long long d = extend_gcd(b, a % b, x1, y1);
+    x = y1;
+    y = x1 - (a / b) * y1;
+    return d;    
+}
+
+long long inv(long long a, long long p) {
+    long long x, y;
+    long long d = extend_gcd(a, p, x, y);
+    if (d != 1) return -1;
+    return (x % p + p) % p;
+}
+
+
+
+void CRT(int *ab1, int *ab2, int n, int p1, int p2){
+    /*
+    * 中国剩余定理合并，最终计算结果会保存在ab1里
+    * @param n为多项式长度
+    * @param p1,p2为两个多项式的模数
+    * @param ab1,ab2为两个多项式的系数
+    */
+    long long P = 1LL * p1 * p2;
+    long long P1 = P / p1;
+    long long P2 = P / p2;
+    long long inv_P1 = inv(P1, (long long)(p1));
+    long long inv_P2 = inv(P2, (long long)(p2));
+    for(int i = 0; i < n; i++){
+        ab1[i] = (1LL * ab1[i] * P1 * inv_P1 % P + 1LL * ab2[i] * P2 * inv_P2 % P)% P;
+    }
+}
+
+
+void pthread_crt_ntt_multiply(int *a, int *b, int *ab, int n, int p){
+    // 计算长度，用于创建复制变量
+    int size=1;
+    while(size<2*n) size<<=1;
+    int *a_copy[4];
+    int *b_copy[4];
+    int *ab_copy[4];
+    struct ntt_arg arg[4];
+    //TODO：寻找合适的模数，能找到四个都是3的吗......还真能找到：
+    // https://blog.miskcoo.com/2014/07/fft-prime-table 记录了常用的素数及其原根，致谢@miskcoo
+    int ntt_p[4] = {469762049,998244353,1004535809,167772161};
+    a_copy[0] = a;
+    b_copy[0] = b;
+    ab_copy[0] = ab;
+    for(int i = 1; i <= 3; i++){
+        a_copy[i] = new int[size];
+        b_copy[i] = new int[size];
+        ab_copy[i] = new int[size];
+    }
+    for(int i = 1; i<=3; i++){
+        std::copy(a, a + size, a_copy[i]);
+        std::copy(b, b + size, b_copy[i]);
+        std::fill(ab_copy[i], ab_copy[i] + size, 0);
+    }
+    for(int i=0; i<=3; i++){
+        arg[i].a = a_copy[i];
+        arg[i].b = b_copy[i];
+        arg[i].ab = ab_copy[i];
+        arg[i].n = n;
+        arg[i].p = ntt_p[i];
+    }
+    void *status;
+    pthread_t threads[NUM_THREADS];
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+    for(int i = 0; i < NUM_THREADS; i++){
+        pthread_create(&threads[i], &attr, pthread_ntt_multiply,(void *) &arg[i])
+    }
+    pthread_attr_destroy(&attr);
+    for(int i = 0; i < NUM_THREADS; i++){
+        pthread_join(threads[i], &status);
+    }
+
+    for(int i=0;i<2;i++){
+        CRT(ab_copy[2*i], ab_copy[2*i+1], size, p[2*i], p[2*i+1]);
+    }
+    long long p1 = 1LL * ntt_p[0] * ntt_p[1];
+    long long p2 = 1LL * ntt_p[2] * ntt_p[3];
+    long long inv_p1 = inv(p1, p2);
+    for(int i=0;i<size;i++){
+        long long k = (ab_copy[2][i]-ab_copy[0][i])* inv_p1 % p2;
+        ab[i] = (k*p1 + ab_copy[0][i])% p;
+    }
+    
+}
+
+
+
 inline void neon_mod(int32x4_t *a, int64_t mu,int MOD){
-    // int32x4_t mod = vdupq_n_s32(MOD);
-    // while(true){
-    //    uint32x4_t mask = vcgeq_s32(*a, mod);
-    //    uint32_t flag = vmaxvq_u32(mask); 
-    //    if(flag == 0) break;
-    //    int32x4_t subtracted = vsubq_s32(*a, mod); 
-    //    *a = vbslq_s32(mask, subtracted, *a); 
-    // }
     int32_t vals[4];
     int32_t subs[4];
     vst1q_s32(vals, *a);
@@ -219,81 +338,9 @@ uint64x2_t neon_mul_int64(int64_t a, int64_t b) {
     result = vsetq_lane_u64(final_low, result, 0); 
     result = vsetq_lane_u64(final_high, result, 1); 
     return result;
-    // a= uint64_t(a);
-    // b= uint64_t(b);
-
-    // uint32_t a_lo = (uint32_t)a;        // a的低32位
-    // uint32_t a_hi = (uint32_t)(a >> 32); // a的高32位
-    // uint32_t b_lo = (uint32_t)b;        // b的低32位
-    // uint32_t b_hi = (uint32_t)(b >> 32); // b的高32位
-
-    // uint32_t temp_a[2] = {a_lo, a_hi};
-    // uint32_t temp_b[2] = {b_lo, b_hi};
-
-    // uint32x2_t ua = vld1_u32(temp_a);
-    // uint32x2_t ub = vld1_u32(temp_b);
-    
-
-    // // 使用NEON进行交叉计算
-    // uint64x2_t result = vmull_u32(ua, ub);  // 初始化结果为0
-
-    // // 低位：a_lo * b_lo
-    // uint64_t low = (uint64_t)a_lo * b_lo;
-
-    // // 中位：a_lo * b_hi + a_hi * b_lo
-    // uint64_t mid = (uint64_t)a_lo * b_hi + (uint64_t)a_hi * b_lo;
-    // uint32_t mid_hi = (uint32_t)(mid >> 32);  // 提取中位的高32位
-    // uint32_t mid_lo = (uint32_t)mid;             // 提取中位的低32位
-
-
-    // // 高位：a_hi * b_hi
-
-    // // 处理中位：将低位结果左移32位，加上中位低32位，处理溢出
-    // uint64_t lo = (uint64_t)mid_lo << 32;
-
-    // // 如果低位溢出，进位到高位
-    // uint64_t carry = (0xFFFFFFFFFFFFFFFF - lo < low);  // 溢出标志
-
-    // uint64_t hi = (uint64_t)mid_hi+carry;
-    // uint64x2_t temp = vcombine_u64(vcreate_u64(lo), vcreate_u64(hi));
-    // result = vaddq_u64(result, temp);
-    // return result;
 }
 
 inline void neon_mod_for_mul(int64x2_t *a, int MOD){
-    // int64x2_t mod = vdupq_n_s64(MOD);
-    // while(true){
-    //    uint64x2_t mask = vcgeq_s64(*a, mod);
-    //    uint64_t flag = vmaxvq_u64(mask); 
-    //    if(flag == 0) break;
-    //    int64x2_t subtracted = vsubq_s64(*a, mod); 
-    //    *a = vbslq_s64(mask, subtracted, *a); 
-    // }
-    // int64x2_t mod = vdupq_n_s64(MOD);
-    //    uint64x2_t mask = vcgeq_s64(*a, mod);
-    //    int64x2_t subtracted = vsubq_s64(*a, mod); 
-    //    *a = vbslq_s64(mask, subtracted, *a);
-    // int i = 0;
-    // while(true){
-    //     int64x2_t mod = vdupq_n_s64((1LL << i) * MOD);
-    //     uint64x2_t mask = vcgeq_s64(*a, mod);
-    //     uint64_t flag = vmaxvq_u64(mask); 
-    //     if(flag == 0)
-    //         break;
-    //     ++i;
-    // }
-    // if (i > 0) i--;
-    // while(true){
-    //    int64x2_t mod = vdupq_n_s64((1LL << i) *MOD);
-    //    uint64x2_t mask = vcgeq_s64(*a, mod);
-    //    uint64_t flag = vmaxvq_u64(mask); 
-    //    if(flag){
-    //     int64x2_t subtracted = vsubq_s64(*a, mod); 
-    //     *a = vbslq_s64(mask, subtracted, *a); 
-    //    }
-    //    if(i==0) break;
-    //    --i;
-    // }
     int64x2_t mod = vdupq_n_s64(MOD);
     uint64x2_t mask = vcgeq_s64(*a, mod);
     int64x2_t subtracted = vsubq_s64(*a, mod); 
@@ -306,8 +353,6 @@ inline void neon_barrett_reduction(int64x2_t *a, int64_t mu, int MOD){
     int64_t subs[2];
     vst1q_s64(vals, *a);
     for(int i = 0; i < 2; i++){
-        // int64_t q = (vals[i] * mu)>> BITE;
-        // int64_t q = vals[i]/ MOD;
         uint64x2_t q_temp = neon_mul_int64(vals[i], mu);
         uint64_t q_lo = vgetq_lane_u64(q_temp, 0);
         uint64_t q_hi = vgetq_lane_u64(q_temp, 1);
@@ -320,19 +365,6 @@ inline void neon_barrett_reduction(int64x2_t *a, int64_t mu, int MOD){
     uint64x2_t mask = vcgeq_s64(*a, mod);
     int64x2_t subtracted = vsubq_s64(*a, mod); 
     *a = vbslq_s64(mask, subtracted, *a); 
-    // neon_mod_for_mul(a, MOD);
-    // float64x2_t vals = vcvtq_f64_s64(*a);
-    // float64x2_t mod_f = vdupq_n_f64(MOD);
-    // int64x2_t sub = vcvtq_s64_f64(vmulq_f64(vdivq_f64(vals, mod_f), mod_f));
-    // int64x2_t subs = vcvtq_s64_f64(vdivq_f64(vals, mod_f));
-    // int64x2_t sub = vcvtq_s64_f64(vmulq_f64(vdivq_f64(vals, mod_f), mod_f));
-
-    // for(int i = 0; i < 2; i++){
-        // int64_t q = (vals[i] * mu)>> BITE;
-        // int64_t q = vals[i]/ MOD;
-        // subs[i] = q * MOD;        
-    // }
-    // int64x2_t sub = vld1q_s64(subs);
 
 }
 
@@ -341,11 +373,6 @@ inline void neon_barrett_reduction(int64x2_t *a, int64_t mu, int MOD){
     int32x4_t c = vaddq_s32(*a, *b);
     neon_mod(&c, MU,MOD);
     return c;
-    // int64x2_t add_lo = vaddl_s32(vget_low_s32(*a), vget_low_s32(*b));
-    // int64x2_t add_hi = vaddl_s32(vget_high_s32(*a), vget_high_s32(*b));
-    // neon_barrett_reduction(&add_lo, MU, MOD);
-    // neon_barrett_reduction(&add_hi, MU, MOD);
-    // return vcombine_s32(vmovn_s64(add_lo), vmovn_s64(add_hi));
 }
 
 inline int32x4_t neon_sub(int32x4_t *a, int32x4_t *b, int MOD, int64_t MU) {
@@ -353,17 +380,6 @@ inline int32x4_t neon_sub(int32x4_t *a, int32x4_t *b, int MOD, int64_t MU) {
     c= vaddq_s32(c, vdupq_n_s32(MOD));
     neon_mod(&c,MU,MOD);
     return c;
-    // int64x2_t sub_lo = vsubl_s32(vget_low_s32(*a), vget_low_s32(*b));
-    // int64x2_t sub_hi = vsubl_s32(vget_high_s32(*a), vget_high_s32(*b));
-    
-    // int64x2_t mod = vdupq_n_s64(MOD);
-    // sub_lo = vaddq_s64(sub_lo, mod);
-    // sub_hi = vaddq_s64(sub_hi, mod);
-
-    // neon_barrett_reduction(&sub_lo, MU, MOD);
-    // neon_barrett_reduction(&sub_hi, MU, MOD);
-    
-    // return vcombine_s32(vmovn_s64(sub_lo), vmovn_s64(sub_hi));
 }
 
 inline int32x4_t neon_mul(int32x4_t *a, int32x4_t *b, int MOD, int64_t MU) {
@@ -445,80 +461,12 @@ void neon_ntt_multiply(int *a, int *b, int *ab, int n,int MOD) {
     neon_ntt(ab,size,MOD,MU,true);
 }
 
-
-
-
-// inline int mod_add(int a, int b, int MOD) {
-//     int res = a + b;
-//     if (res >= MOD) res -= MOD;
-//     return res;
-// }
-
-// // 标准版模减
-// inline int mod_sub(int a, int b, int MOD) {
-//     int res = a - b;
-//     if (res < 0) res += MOD;
-//     return res;
-// }
-
-// // 标准版模乘
-// inline int mod_mul(int a, int b, int MOD) {
-//     return int((1LL * a * b) % MOD);
-// }
-
-// void test_neon_operations(int *save_correct_add, int *save_test_add,
-//                            int *save_correct_sub, int *save_test_sub,
-//                            int *save_correct_mul, int *save_test_mul,
-//                            int N, int MOD) 
-// {
-//     srand(time(0));
-
-//     for (int i = 0; i < N; i += 4) {
-//         // 随机生成数据
-//         int32_t a_scalar[4], b_scalar[4];
-//         for (int j = 0; j < 4; ++j) {
-//             a_scalar[j] = rand() % (2 * MOD);  // 范围可以大一点，测试循环减法
-//             b_scalar[j] = rand() % (2 * MOD);
-//         }
-
-//         // 装载到向量
-//         int32x4_t a_vec = vld1q_s32(a_scalar);
-//         int32x4_t b_vec = vld1q_s32(b_scalar);
-
-//         // ===== 1. 测试加法 =====
-//         int32x4_t add_vec = neon_add(&a_vec, &b_vec, MOD);
-//         vst1q_s32(save_test_add + i, add_vec); // 保存测试结果
-
-//         for (int j = 0; j < 4; ++j) {
-//             save_correct_add[i + j] = mod_add(a_scalar[j], b_scalar[j], MOD);
-//         }
-
-//         // ===== 2. 测试减法 =====
-//         int32x4_t sub_vec = neon_sub(&a_vec, &b_vec, MOD);
-//         vst1q_s32(save_test_sub + i, sub_vec); // 保存测试结果
-
-//         for (int j = 0; j < 4; ++j) {
-//             save_correct_sub[i + j] = mod_sub(a_scalar[j], b_scalar[j], MOD);
-//         }
-
-//         // ===== 3. 测试乘法 =====
-//         int32x4_t mul_vec = neon_mul(&a_vec, &b_vec, MOD);
-//         vst1q_s32(save_test_mul + i, mul_vec); // 保存测试结果
-
-//         for (int j = 0; j < 4; ++j) {
-//             save_correct_mul[i + j] = mod_mul(a_scalar[j], b_scalar[j], MOD);
-//         }
-//     }
-// }
-
-
-
 int a[300000], b[300000], ab[300000];
 int main(int argc, char *argv[])
 {
     
     // 保证输入的所有模数的原根均为 3, 且模数都能表示为 a \times 4 ^ k + 1 的形式
-    // 输入模数分别为 7340033 104857601 469762049 263882790666241
+    // 输入模数分别为 7340033 104857601 469762049 1337006139375617
     // 第四个模数超过了整型表示范围, 如果实现此模数意义下的多项式乘法需要修改框架
     // 对第四个模数的输入数据不做必要要求, 如果要自行探索大模数 NTT, 请在完成前三个模数的基础代码及优化后实现大模数 NTT
     // 输入文件共五个, 第一个输入文件 n = 4, 其余四个文件分别对应四个模数, n = 131072
@@ -534,7 +482,8 @@ int main(int argc, char *argv[])
         // TODO : 将 poly_multiply 函数替换成你写的 ntt
         // poly_multiply(a, b, ab, n_, p_);
         // ntt_multiply(a, b, ab, n_, p_);
-        neon_ntt_multiply(a, b, ab, n_, p_);
+        // neon_ntt_multiply(a, b, ab, n_, p_);
+        pthread_crt_ntt_multiply(a, b, ab, n_, p_);
         auto End = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double,std::ratio<1,1000>>elapsed = End - Start;
         ans += elapsed.count();
@@ -542,29 +491,8 @@ int main(int argc, char *argv[])
         std::cout<<"average latency for n = "<<n_<<" p = "<<p_<<" : "<<ans<<" (us) "<<std::endl;
         // 可以使用 fWrite 函数将 ab 的输出结果打印到 files 文件夹下
         // 禁止使用 cout 一次性输出大量文件内容
-        fWrite(ab, n_, i);
+        // fWrite(ab, n_, i);
     }
-
-    // const int N = 12;   // 测试样本数量（一定是4的倍数）
-    // const int MOD = 998244353; // 你自己设定
-
-    // int save_correct_add[N], save_test_add[N];
-    // int save_correct_sub[N], save_test_sub[N];
-    // int save_correct_mul[N], save_test_mul[N];
-
-    // test_neon_operations(save_correct_add, save_test_add,
-    //                      save_correct_sub, save_test_sub,
-    //                      save_correct_mul, save_test_mul,
-    //                      N, MOD);
-    
-    // fWrite(save_correct_add,N/2,111);
-    // fWrite(save_test_add,N/2,110);
-    // fWrite(save_correct_sub,N/2,222);
-    // fWrite(save_test_sub,N/2,220);
-    // fWrite(save_correct_mul,N/2,333);
-    // fWrite(save_test_mul,N/2,330);
-    
-    // return 0;
 }
 
 
