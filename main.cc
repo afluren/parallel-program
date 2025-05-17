@@ -11,8 +11,9 @@
 #include <ctime> 
 #include <algorithm>
 #include <pthread.h>
+#include <limits.h>
 // 可以自行添加需要的头文件
-
+typedef long long LL;
 
 const int ROOT = 3;
 const int BITE = 63;
@@ -20,7 +21,7 @@ const int NUM_THREADS = 4;
 // const int MOD = 998244353;
 
 
-void fRead(int *a, int *b, int *n, int *p, int input_id){
+void fRead(LL *a, LL *b, int *n, LL *p, int input_id){
     // 数据输入函数
     std::string str1 = "/nttdata/";
     std::string str2 = std::to_string(input_id);
@@ -39,7 +40,7 @@ void fRead(int *a, int *b, int *n, int *p, int input_id){
     }
 }
 
-void fCheck(int *ab, int n, int input_id){
+void fCheck(LL *ab, int n, int input_id){
     // 判断多项式乘法结果是否正确
     std::string str1 = "/nttdata/";
     std::string str2 = std::to_string(input_id);
@@ -50,7 +51,7 @@ void fCheck(int *ab, int n, int input_id){
     std::ifstream fin;
     fin.open(data_path, std::ios::in);
     for (int i = 0; i < n * 2 - 1; i++){
-        int x;
+        long long x;
         fin>>x;
         if(x != ab[i]){
             std::cout<<"多项式乘法结果错误"<<std::endl;
@@ -61,7 +62,7 @@ void fCheck(int *ab, int n, int input_id){
     return;
 }
 
-void fWrite(int *ab, int n, int input_id){
+void fWrite(LL *ab, int n, int input_id){
     // 数据输出函数, 可以用来输出最终结果, 也可用于调试时输出中间数组
     std::string str1 = "files/";
     std::string str2 = std::to_string(input_id);
@@ -84,8 +85,8 @@ void poly_multiply(int *a, int *b, int *ab, int n, int p){
     }
 }
 
-int qpow(int a, int b, int p) {
-    int ans = 1;
+LL qpow(LL a, LL b, LL p) {
+    LL ans = 1;
     while (b) {
         if (b & 1) ans = (1LL*ans * a) % p;
         a = (1LL*a * a) % p;
@@ -94,7 +95,7 @@ int qpow(int a, int b, int p) {
     return ans;
 }
 
-void bit_reverse(int *a, int n) {
+void bit_reverse(LL *a, int n) {
     int j = 0;
     for (int i = 1; i < n; i++) {
         int bit = n >> 1;
@@ -107,17 +108,17 @@ void bit_reverse(int *a, int n) {
     }
 }
 
-void ntt(int *a,int n,int MOD,bool invert=false) {
+void ntt(LL *a,int n,LL MOD,bool invert=false) {
     bit_reverse(a, n);
 
     for (int len = 2; len <= n; len <<= 1) {
-        int wn = qpow(ROOT, (MOD - 1) / len, MOD);
+        LL wn = qpow(ROOT, (MOD - 1) / len, MOD);
         if (invert) wn = qpow(wn, MOD - 2, MOD);
 
         for (int i = 0; i < n; i += len) {
-            int w = 1;
+            LL w = 1;
             for (int j = 0; j < len / 2; j++) {
-                int u = a[i + j], v = 1LL * w * a[i + j + len / 2] % MOD;
+                LL u = a[i + j], v = 1LL * w * a[i + j + len / 2] % MOD;
                 a[i + j] = (u + v) % MOD;
                 a[i + j + len / 2] = (u - v+MOD) % MOD;
                 w = 1LL * w * wn % MOD;
@@ -126,12 +127,53 @@ void ntt(int *a,int n,int MOD,bool invert=false) {
     }
 
     if (invert) {
-        int inv_n = qpow(n, MOD - 2, MOD);
+        LL inv_n = qpow(n, MOD - 2, MOD);
         for (int i = 0; i < n; i++) a[i] = 1LL * a[i] * inv_n % MOD;
     }
 }
 
-void ntt_multiply(int *a, int *b, int *ab, int n,int MOD) {
+void openmp_ntt(LL *a,int n,LL MOD,bool invert=false) {
+    bit_reverse(a, n);
+
+    for (int len = 2; len <= n; len <<= 1) {
+        LL wn = qpow(ROOT, (MOD - 1) / len, MOD);
+        if (invert) wn = qpow(wn, MOD - 2, MOD);
+        LL *w = new LL[len / 2];
+        w[0] = 1;
+        for (int i = 1; i < len / 2; i++) w[i] = 1LL * w[i - 1] * wn % MOD;
+        for (int i = 0; i < n; i += len) {
+            omp_set_num_threads(NUM_THREADS);
+            #pragma omp parallel
+            {
+            #pragma omp for schedule(dynamic)
+                for (int j = 0; j < len / 2; j++) {
+                    LL u = a[i + j], v = 1LL * w[j] * a[i + j + len / 2] % MOD;
+                    a[i + j] = (u + v) % MOD;
+                    a[i + j + len / 2] = (u - v+MOD) % MOD;
+                }
+            }
+        }
+
+        if (invert) {
+            LL inv_n = qpow(n, MOD - 2, MOD);
+            for (int i = 0; i < n; i++) a[i] = 1LL * a[i] * inv_n % MOD;
+        }
+        delete[] w;
+    }
+}
+void openmp_ntt_multiply(LL *a, LL *b, LL *ab, int n,LL MOD) {
+    int size=1;
+    while(size<2*n) size<<=1;
+    for(int i=n;i<size;i++) a[i]=b[i]=0;
+    openmp_ntt(a, size,MOD,false);
+    openmp_ntt(b,size,MOD, false);
+    for (int i = 0; i < size; i++) ab[i] = 1LL * a[i] * b[i] % MOD;
+    openmp_ntt(ab,size,MOD, true);
+}
+
+
+
+void ntt_multiply(LL *a, LL *b, LL *ab, int n,LL MOD) {
     int size=1;
     while(size<2*n) size<<=1;
     for(int i=n;i<size;i++) a[i]=b[i]=0;
@@ -143,20 +185,20 @@ void ntt_multiply(int *a, int *b, int *ab, int n,int MOD) {
 
 
 struct ntt_arg{
-    int *a;
-    int *b;
-    int *ab;
+    LL *a;
+    LL *b;
+    LL *ab;
     int n;
-    int p; // 和MOD一样
+    LL p; // 和MOD一样
 };
 
 void* pthread_ntt_multiply(void *arg) {
     ntt_arg *narg = (ntt_arg *)arg;
-    int *a = narg->a;
-    int *b = narg->b;
-    int *ab = narg->ab;
+    LL *a = narg->a;
+    LL *b = narg->b;
+    LL *ab = narg->ab;
     int n = narg->n;
-    int MOD = narg->p;
+    LL MOD = narg->p;
     int size=1;
     while(size<2*n) size<<=1;
     for(int i=n;i<size;i++) a[i]=b[i]=0;
@@ -164,66 +206,78 @@ void* pthread_ntt_multiply(void *arg) {
     ntt(b,size,MOD, false);
     for (int i = 0; i < size; i++) ab[i] = 1LL * a[i] * b[i] % MOD;
     ntt(ab,size,MOD, true);
+    pthread_exit(NULL);
 }
 
-long long extend_gcd(long long a, long long b, long long &x, long long &y) {
+LL extend_gcd(LL a, LL b, LL &x, LL &y) {
     if (b == 0) {
         x = 1;
         y = 0;
         return a;
     }
-    long long x1, y1;
-    long long d = extend_gcd(b, a % b, x1, y1);
+    LL x1, y1;
+    LL d = extend_gcd(b, a % b, x1, y1);
     x = y1;
     y = x1 - (a / b) * y1;
     return d;    
 }
 
-long long inv(long long a, long long p) {
-    long long x, y;
-    long long d = extend_gcd(a, p, x, y);
+LL inv(LL a, LL p) {
+    LL x, y;
+    LL d = extend_gcd(a, p, x, y);
     if (d != 1) return -1;
     return (x % p + p) % p;
 }
 
-
-
-void CRT(int *ab1, int *ab2, int n, int p1, int p2){
+inline LL mulmod ( LL a, LL b, LL p )  {
+    unsigned long long x = 1ULL * a%p, y = 1ULL * b%p;
+    LL result = x * y - (LL)((long double)x / p * y + 0.5) * p;
+    return result < 0 ? result + p : result;
+    
+}
+void CRT(LL *ab1, LL *ab2, int n, int p1, int p2){
     /*
     * 中国剩余定理合并，最终计算结果会保存在ab1里
     * @param n为多项式长度
     * @param p1,p2为两个多项式的模数
     * @param ab1,ab2为两个多项式的系数
     */
-    long long P = 1LL * p1 * p2;
-    long long P1 = P / p1;
-    long long P2 = P / p2;
-    long long inv_P1 = inv(P1, (long long)(p1));
-    long long inv_P2 = inv(P2, (long long)(p2));
+    LL P = 1LL * p1 * p2;
+    LL P1 = P / p1;
+    LL P2 = P / p2;  
+    LL inv_P1 = inv(P1, (LL)(p1));
+    LL inv_P2 = inv(P2, (LL)(p2));
+    bool flag = false;
     for(int i = 0; i < n; i++){
-        ab1[i] = (1LL * ab1[i] * P1 * inv_P1 % P + 1LL * ab2[i] * P2 * inv_P2 % P)% P;
+        LL temp1 = mulmod(P1 , inv_P1 , P);
+        LL temp2 = mulmod(P2 , inv_P2 , P);
+        // if (flag == false && (LONG_LONG_MAX/temp1 < (ab1[i]% P) || LONG_LONG_MAX/temp2 < (ab2[i]% P))){
+        //     std::cout<<"CRT overflow"<<std::endl<<"temp1:"<<temp1<<",temp2:"<<temp2<<",ab1[i]:"<<ab1[i]<<",ab2[i]:"<<ab2[i]<<"p1:"<<p1<<",p2:"<<p2<<std::endl;
+        //     flag = true;
+        // }
+        ab1[i] = ((mulmod(ab1[i], temp1, P) + mulmod(ab2[i], temp2, P))% P+P)%P;
     }
 }
 
 
-void pthread_crt_ntt_multiply(int *a, int *b, int *ab, int n, int p){
+void pthread_crt_ntt_multiply(LL *a, LL *b, LL *ab, int n, LL p){
     // 计算长度，用于创建复制变量
     int size=1;
     while(size<2*n) size<<=1;
-    int *a_copy[4];
-    int *b_copy[4];
-    int *ab_copy[4];
+    LL *a_copy[4];
+    LL *b_copy[4];
+    LL *ab_copy[4];
     struct ntt_arg arg[4];
     //TODO：寻找合适的模数，能找到四个都是3的吗......还真能找到：
     // https://blog.miskcoo.com/2014/07/fft-prime-table 记录了常用的素数及其原根，致谢@miskcoo
-    int ntt_p[4] = {469762049,998244353,1004535809,167772161};
+    LL ntt_p[4] = {167772161,469762049,998244353,1004535809};
     a_copy[0] = a;
     b_copy[0] = b;
     ab_copy[0] = ab;
     for(int i = 1; i <= 3; i++){
-        a_copy[i] = new int[size];
-        b_copy[i] = new int[size];
-        ab_copy[i] = new int[size];
+        a_copy[i] = new LL[size];
+        b_copy[i] = new LL[size];
+        ab_copy[i] = new LL[size];
     }
     for(int i = 1; i<=3; i++){
         std::copy(a, a + size, a_copy[i]);
@@ -243,24 +297,115 @@ void pthread_crt_ntt_multiply(int *a, int *b, int *ab, int n, int p){
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
     for(int i = 0; i < NUM_THREADS; i++){
-        pthread_create(&threads[i], &attr, pthread_ntt_multiply,(void *) &arg[i])
+        pthread_create(&threads[i], &attr, pthread_ntt_multiply,(void *) &arg[i]);
     }
     pthread_attr_destroy(&attr);
     for(int i = 0; i < NUM_THREADS; i++){
         pthread_join(threads[i], &status);
     }
-
+    LL* ab_long[4];
+    for(int i = 0; i < 4; i++){
+        ab_long[i] = new LL[size];
+        std::copy(ab_copy[i], ab_copy[i] + size, ab_long[i]);
+    }
     for(int i=0;i<2;i++){
-        CRT(ab_copy[2*i], ab_copy[2*i+1], size, p[2*i], p[2*i+1]);
+        CRT(ab_long[2*i], ab_long[2*i+1], size, ntt_p[2*i], ntt_p[2*i+1]);
     }
-    long long p1 = 1LL * ntt_p[0] * ntt_p[1];
-    long long p2 = 1LL * ntt_p[2] * ntt_p[3];
-    long long inv_p1 = inv(p1, p2);
+
+    LL p1 = 1LL * ntt_p[0] * ntt_p[1];
+    LL p2 = 1LL * ntt_p[2] * ntt_p[3];
+    LL p2_temp = p2 % p;
+    LL inv_p2 = inv(p2, p1);
     for(int i=0;i<size;i++){
-        long long k = (ab_copy[2][i]-ab_copy[0][i])* inv_p1 % p2;
-        ab[i] = (k*p1 + ab_copy[0][i])% p;
+        // LL k = ((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 * (inv_p2 % p1) % p1;
+        LL k = mulmod(((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 , (inv_p2 % p1) , p1);
+        LL temp= (mulmod(k, p2, p) + ab_long[2][i])%p;
+        ab[i] = temp;
     }
-    
+    for(int i=0;i<=3;i++){
+        delete[] ab_long[i];
+    }
+    for(int i=1;i<=3;i++){
+        delete[] a_copy[i];
+        delete[] b_copy[i];
+        delete[] ab_copy[i];
+    }
+    // for(int i=0;i<1;i++){
+    //     CRT(ab_copy[2*i], ab_copy[2*i+1], size, ntt_p[2*i], ntt_p[2*i+1]);
+    // }
+    // LL p1 = 1LL * ntt_p[0] * ntt_p[1];
+    // LL p2 = 1LL * ntt_p[2];
+    // LL p1_temp = p1 % p;
+    // LL inv_p1 = inv(p1, p2);
+    // for(int i=0;i<size;i++){
+    //     LL k = 1LL * (((ab_copy[2][i]-ab_copy[0][i])% p2 + p2)%p2)* (inv_p1 % p2) % p2;
+    //     ab[i] = ((((k%p)*p1_temp)%p + (LL)ab_copy[0][i]%p)%p+p)%p;
+    // }
+    // for(int i=1;i<=3;i++){
+    //     delete[] a_copy[i];
+    //     delete[] b_copy[i];
+    //     delete[] ab_copy[i];
+    // }
+}
+
+void openmp_crt_ntt_multiply(LL *a, LL *b, LL *ab, int n, LL p){
+    // 计算长度，用于创建复制变量
+    int size=1;
+    while(size<2*n) size<<=1;
+    LL *a_copy[4];
+    LL *b_copy[4];
+    LL *ab_copy[4];
+    //TODO：寻找合适的模数，能找到四个都是3的吗......还真能找到：
+    // https://blog.miskcoo.com/2014/07/fft-prime-table 记录了常用的素数及其原根，致谢@miskcoo
+    LL ntt_p[4] = {469762049,998244353,1004535809,167772161};
+    a_copy[0] = a;
+    b_copy[0] = b;
+    ab_copy[0] = ab;
+    for(int i = 1; i <= 3; i++){
+        a_copy[i] = new LL[size];
+        b_copy[i] = new LL[size];
+        ab_copy[i] = new LL[size];
+    }
+    for(int i = 1; i<=3; i++){
+        std::copy(a, a + size, a_copy[i]);
+        std::copy(b, b + size, b_copy[i]);
+        std::fill(ab_copy[i], ab_copy[i] + size, 0);
+    }
+    omp_set_num_threads(NUM_THREADS);
+    #pragma omp parallel
+    {
+    #pragma omp for
+        for(int i=0; i<=3; i++){
+            ntt_multiply(a_copy[i], b_copy[i], ab_copy[i], n, ntt_p[i]);
+        }
+    }
+    LL* ab_long[4];
+    for(int i = 0; i < 4; i++){
+        ab_long[i] = new LL[size];
+        std::copy(ab_copy[i], ab_copy[i] + size, ab_long[i]);
+    }
+    for(int i=0;i<2;i++){
+        CRT(ab_long[2*i], ab_long[2*i+1], size, ntt_p[2*i], ntt_p[2*i+1]);
+    }
+
+    LL p1 = 1LL * ntt_p[0] * ntt_p[1];
+    LL p2 = 1LL * ntt_p[2] * ntt_p[3];
+    LL p2_temp = p2 % p;
+    LL inv_p2 = inv(p2, p1);
+    for(int i=0;i<size;i++){
+        // LL k = ((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 * (inv_p2 % p1) % p1;
+        LL k = mulmod(((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 , (inv_p2 % p1) , p1);
+        LL temp= ((1LL * (k%p)*p2_temp)%p + ab_long[2][i]%p)%p;
+        ab[i] = temp;
+    }
+    for(int i=0;i<=3;i++){
+        delete[] ab_long[i];
+    }
+    for(int i=1;i<=3;i++){
+        delete[] a_copy[i];
+        delete[] b_copy[i];
+        delete[] ab_copy[i];
+    }
 }
 
 
@@ -394,7 +539,7 @@ inline int32x4_t neon_mul(int32x4_t *a, int32x4_t *b, int MOD, int64_t MU) {
 }
 
 void neon_ntt(int *a,int n,int MOD,int64_t MU,bool invert=false) {
-    bit_reverse(a, n);
+    // bit_reverse(a, n);
 
     for (int len = 2; len <= n; len <<= 1) {
         int wn = qpow(ROOT, (MOD - 1) / len, MOD);
@@ -461,7 +606,7 @@ void neon_ntt_multiply(int *a, int *b, int *ab, int n,int MOD) {
     neon_ntt(ab,size,MOD,MU,true);
 }
 
-int a[300000], b[300000], ab[300000];
+LL a[300000], b[300000], ab[300000];
 int main(int argc, char *argv[])
 {
     
@@ -472,10 +617,11 @@ int main(int argc, char *argv[])
     // 输入文件共五个, 第一个输入文件 n = 4, 其余四个文件分别对应四个模数, n = 131072
     // 在实现快速数论变化前, 后四个测试样例运行时间较久, 推荐调试正确性时只使用输入文件 1
     int test_begin = 0;
-    int test_end = 0;
+    int test_end = 4;
     for(int i = test_begin; i <= test_end; ++i){
         long double ans = 0;
-        int n_, p_;
+        int n_;
+        LL p_;
         fRead(a, b, &n_, &p_, i);
         memset(ab, 0, sizeof(ab));
         auto Start = std::chrono::high_resolution_clock::now();
@@ -484,6 +630,8 @@ int main(int argc, char *argv[])
         // ntt_multiply(a, b, ab, n_, p_);
         // neon_ntt_multiply(a, b, ab, n_, p_);
         pthread_crt_ntt_multiply(a, b, ab, n_, p_);
+        // openmp_crt_ntt_multiply(a, b, ab, n_, p_);
+        // openmp_ntt_multiply(a, b, ab, n_, p_);
         auto End = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double,std::ratio<1,1000>>elapsed = End - Start;
         ans += elapsed.count();
@@ -491,8 +639,10 @@ int main(int argc, char *argv[])
         std::cout<<"average latency for n = "<<n_<<" p = "<<p_<<" : "<<ans<<" (us) "<<std::endl;
         // 可以使用 fWrite 函数将 ab 的输出结果打印到 files 文件夹下
         // 禁止使用 cout 一次性输出大量文件内容
-        // fWrite(ab, n_, i);
+        fWrite(ab, n_, i);
     }
+
+    pthread_exit(NULL);
 }
 
 
