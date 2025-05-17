@@ -357,7 +357,7 @@ void openmp_crt_ntt_multiply(LL *a, LL *b, LL *ab, int n, LL p){
     LL *ab_copy[4];
     //TODO：寻找合适的模数，能找到四个都是3的吗......还真能找到：
     // https://blog.miskcoo.com/2014/07/fft-prime-table 记录了常用的素数及其原根，致谢@miskcoo
-    LL ntt_p[4] = {469762049,998244353,1004535809,167772161};
+    LL ntt_p[4] = {167772161,469762049,998244353,1004535809};
     a_copy[0] = a;
     b_copy[0] = b;
     ab_copy[0] = ab;
@@ -395,7 +395,7 @@ void openmp_crt_ntt_multiply(LL *a, LL *b, LL *ab, int n, LL p){
     for(int i=0;i<size;i++){
         // LL k = ((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 * (inv_p2 % p1) % p1;
         LL k = mulmod(((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 , (inv_p2 % p1) , p1);
-        LL temp= ((1LL * (k%p)*p2_temp)%p + ab_long[2][i]%p)%p;
+        LL temp= (mulmod(k, p2, p) + ab_long[2][i])%p;
         ab[i] = temp;
     }
     for(int i=0;i<=3;i++){
@@ -629,8 +629,8 @@ int main(int argc, char *argv[])
         // poly_multiply(a, b, ab, n_, p_);
         // ntt_multiply(a, b, ab, n_, p_);
         // neon_ntt_multiply(a, b, ab, n_, p_);
-        pthread_crt_ntt_multiply(a, b, ab, n_, p_);
-        // openmp_crt_ntt_multiply(a, b, ab, n_, p_);
+        // pthread_crt_ntt_multiply(a, b, ab, n_, p_);
+        openmp_crt_ntt_multiply(a, b, ab, n_, p_);
         // openmp_ntt_multiply(a, b, ab, n_, p_);
         auto End = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double,std::ratio<1,1000>>elapsed = End - Start;
