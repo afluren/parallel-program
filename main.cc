@@ -132,33 +132,107 @@ void ntt(LL *a,int n,LL MOD,bool invert=false) {
     }
 }
 
+struct partial_ntt_arg{
+    LL *a;
+    int start;
+    int end;
+    int len;
+    LL MOD;
+    LL *w;
+};
+
+void* partial_ntt(void* arg){
+    partial_ntt_arg *narg = (partial_ntt_arg *)arg;
+    LL *a = narg->a;
+    int start = narg->start;
+    int end = narg->end;
+    int len = narg->len;
+    LL MOD = narg->MOD;
+    LL *w = narg->w;
+    for(int i=start;i<end;i+=len){
+        for (int j = 0; j < len / 2; j++) {
+            LL u = a[i + j], v = 1LL * w[j] * a[i + j + len / 2] % MOD;
+            a[i + j] = (u + v) % MOD;
+            a[i + j + len / 2] = (u - v+MOD) % MOD;
+        }
+    }
+    pthread_exit(NULL);
+}
+
+void pthread_ntt(LL *a,int n,LL MOD,bool invert=false){
+    bit_reverse(a, n);
+
+    for (int len = 2; len <= n; len <<= 1) {
+        LL wn = qpow(ROOT, (MOD - 1) / len, MOD);
+        if (invert) wn = qpow(wn, MOD - 2, MOD);
+        LL* w = new LL[len / 2];
+        w[0] = 1;
+        for (int i = 1; i < len / 2; i++) w[i] = 1LL * wn * w[i - 1] % MOD;
+        partial_ntt_arg arg[NUM_THREADS];
+        int partials[NUM_THREADS+1];
+        partials[0]=0;
+        int block;
+        int temp_n = n;
+        for(int i=1;i<NUM_THREADS;i++){
+            block = temp_n/len;
+            partials[i]=partials[i-1]+block*len;
+            temp_n-=block*len;
+        }
+        partials[NUM_THREADS]=n;
+        for(int i=0;i<NUM_THREADS;i++){
+            arg[i].a=a;
+            arg[i].start=partials[i];
+            arg[i].end=partials[i+1];
+            arg[i].len=len;
+            arg[i].MOD=MOD;
+            arg[i].w=w;
+        }
+        void* status;
+        pthread_t thread[NUM_THREADS];
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+        for(int i=0;i<NUM_THREADS;i++){
+            pthread_create(&thread[i], &attr, partial_ntt, (void*)&arg[i]);
+        }
+        pthread_attr_destroy(&attr);
+        for(int i=0;i<NUM_THREADS;i++){
+            pthread_join(thread[i], &status);
+        }
+        delete[] w;
+    }
+
+    if (invert) {
+        LL inv_n = qpow(n, MOD - 2, MOD);
+        for (int i = 0; i < n; i++) a[i] = 1LL * a[i] * inv_n % MOD;
+    }    
+}
+
 void openmp_ntt(LL *a,int n,LL MOD,bool invert=false) {
     bit_reverse(a, n);
 
     for (int len = 2; len <= n; len <<= 1) {
         LL wn = qpow(ROOT, (MOD - 1) / len, MOD);
         if (invert) wn = qpow(wn, MOD - 2, MOD);
-        LL *w = new LL[len / 2];
+        LL* w = new LL[len / 2];
         w[0] = 1;
-        for (int i = 1; i < len / 2; i++) w[i] = 1LL * w[i - 1] * wn % MOD;
+        for (int i = 1; i < len / 2; i++) w[i] = 1LL * wn * w[i - 1] % MOD;
+
+        omp_set_num_threads(NUM_THREADS);
+        #pragma omp parallel for
         for (int i = 0; i < n; i += len) {
-            omp_set_num_threads(NUM_THREADS);
-            #pragma omp parallel
-            {
-            #pragma omp for schedule(dynamic)
-                for (int j = 0; j < len / 2; j++) {
-                    LL u = a[i + j], v = 1LL * w[j] * a[i + j + len / 2] % MOD;
-                    a[i + j] = (u + v) % MOD;
-                    a[i + j + len / 2] = (u - v+MOD) % MOD;
-                }
+            
+            for (int j = 0; j < len / 2; j++) {
+                LL u = a[i + j], v = 1LL * w[j] * a[i + j + len / 2] % MOD;
+                a[i + j] = (u + v) % MOD;
+                a[i + j + len / 2] = (u - v+MOD) % MOD;
             }
         }
+    }
 
-        if (invert) {
-            LL inv_n = qpow(n, MOD - 2, MOD);
-            for (int i = 0; i < n; i++) a[i] = 1LL * a[i] * inv_n % MOD;
-        }
-        delete[] w;
+    if (invert) {
+        LL inv_n = qpow(n, MOD - 2, MOD);
+        for (int i = 0; i < n; i++) a[i] = 1LL * a[i] * inv_n % MOD;
     }
 }
 void openmp_ntt_multiply(LL *a, LL *b, LL *ab, int n,LL MOD) {
@@ -171,6 +245,15 @@ void openmp_ntt_multiply(LL *a, LL *b, LL *ab, int n,LL MOD) {
     openmp_ntt(ab,size,MOD, true);
 }
 
+void pthread_ntt_multiply(LL *a, LL *b, LL *ab, int n,LL MOD) {
+    int size=1;
+    while(size<2*n) size<<=1;
+    for(int i=n;i<size;i++) a[i]=b[i]=0;
+    pthread_ntt(a, size,MOD,false);
+    pthread_ntt(b,size,MOD, false);
+    for (int i = 0; i < size; i++) ab[i] = 1LL * a[i] * b[i] % MOD;
+    pthread_ntt(ab,size,MOD, true);
+}
 
 
 void ntt_multiply(LL *a, LL *b, LL *ab, int n,LL MOD) {
@@ -303,13 +386,8 @@ void pthread_crt_ntt_multiply(LL *a, LL *b, LL *ab, int n, LL p){
     for(int i = 0; i < NUM_THREADS; i++){
         pthread_join(threads[i], &status);
     }
-    LL* ab_long[4];
-    for(int i = 0; i < 4; i++){
-        ab_long[i] = new LL[size];
-        std::copy(ab_copy[i], ab_copy[i] + size, ab_long[i]);
-    }
     for(int i=0;i<2;i++){
-        CRT(ab_long[2*i], ab_long[2*i+1], size, ntt_p[2*i], ntt_p[2*i+1]);
+        CRT(ab_copy[2*i], ab_copy[2*i+1], size, ntt_p[2*i], ntt_p[2*i+1]);
     }
 
     LL p1 = 1LL * ntt_p[0] * ntt_p[1];
@@ -317,13 +395,10 @@ void pthread_crt_ntt_multiply(LL *a, LL *b, LL *ab, int n, LL p){
     LL p2_temp = p2 % p;
     LL inv_p2 = inv(p2, p1);
     for(int i=0;i<size;i++){
-        // LL k = ((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 * (inv_p2 % p1) % p1;
-        LL k = mulmod(((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 , (inv_p2 % p1) , p1);
-        LL temp= (mulmod(k, p2, p) + ab_long[2][i])%p;
+        // LL k = ((ab_copy[0][i]-ab_copy[2][i])% p1 + p1)%p1 * (inv_p2 % p1) % p1;
+        LL k = mulmod(((ab_copy[0][i]-ab_copy[2][i])% p1 + p1)%p1 , (inv_p2 % p1) , p1);
+        LL temp= (mulmod(k, p2, p) + ab_copy[2][i])%p;
         ab[i] = temp;
-    }
-    for(int i=0;i<=3;i++){
-        delete[] ab_long[i];
     }
     for(int i=1;i<=3;i++){
         delete[] a_copy[i];
@@ -379,13 +454,8 @@ void openmp_crt_ntt_multiply(LL *a, LL *b, LL *ab, int n, LL p){
             ntt_multiply(a_copy[i], b_copy[i], ab_copy[i], n, ntt_p[i]);
         }
     }
-    LL* ab_long[4];
-    for(int i = 0; i < 4; i++){
-        ab_long[i] = new LL[size];
-        std::copy(ab_copy[i], ab_copy[i] + size, ab_long[i]);
-    }
     for(int i=0;i<2;i++){
-        CRT(ab_long[2*i], ab_long[2*i+1], size, ntt_p[2*i], ntt_p[2*i+1]);
+        CRT(ab_copy[2*i], ab_copy[2*i+1], size, ntt_p[2*i], ntt_p[2*i+1]);
     }
 
     LL p1 = 1LL * ntt_p[0] * ntt_p[1];
@@ -393,13 +463,10 @@ void openmp_crt_ntt_multiply(LL *a, LL *b, LL *ab, int n, LL p){
     LL p2_temp = p2 % p;
     LL inv_p2 = inv(p2, p1);
     for(int i=0;i<size;i++){
-        // LL k = ((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 * (inv_p2 % p1) % p1;
-        LL k = mulmod(((ab_long[0][i]-ab_long[2][i])% p1 + p1)%p1 , (inv_p2 % p1) , p1);
-        LL temp= (mulmod(k, p2, p) + ab_long[2][i])%p;
+        // LL k = ((ab_copy[0][i]-ab_copy[2][i])% p1 + p1)%p1 * (inv_p2 % p1) % p1;
+        LL k = mulmod(((ab_copy[0][i]-ab_copy[2][i])% p1 + p1)%p1 , (inv_p2 % p1) , p1);
+        LL temp= (mulmod(k, p2, p) + ab_copy[2][i])%p;
         ab[i] = temp;
-    }
-    for(int i=0;i<=3;i++){
-        delete[] ab_long[i];
     }
     for(int i=1;i<=3;i++){
         delete[] a_copy[i];
@@ -617,7 +684,7 @@ int main(int argc, char *argv[])
     // 输入文件共五个, 第一个输入文件 n = 4, 其余四个文件分别对应四个模数, n = 131072
     // 在实现快速数论变化前, 后四个测试样例运行时间较久, 推荐调试正确性时只使用输入文件 1
     int test_begin = 0;
-    int test_end = 4;
+    int test_end = 3;
     for(int i = test_begin; i <= test_end; ++i){
         long double ans = 0;
         int n_;
@@ -627,11 +694,12 @@ int main(int argc, char *argv[])
         auto Start = std::chrono::high_resolution_clock::now();
         // TODO : 将 poly_multiply 函数替换成你写的 ntt
         // poly_multiply(a, b, ab, n_, p_);
-        // ntt_multiply(a, b, ab, n_, p_);
+        ntt_multiply(a, b, ab, n_, p_);
         // neon_ntt_multiply(a, b, ab, n_, p_);
         // pthread_crt_ntt_multiply(a, b, ab, n_, p_);
-        openmp_crt_ntt_multiply(a, b, ab, n_, p_);
+        // openmp_crt_ntt_multiply(a, b, ab, n_, p_);
         // openmp_ntt_multiply(a, b, ab, n_, p_);
+        // pthread_ntt_multiply(a, b, ab, n_, p_);
         auto End = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double,std::ratio<1,1000>>elapsed = End - Start;
         ans += elapsed.count();
