@@ -1,5 +1,8 @@
-CXX = g++
-CXXFLAGS = -Iinclude -O2 -Wall -std=c++11 -fopenmp -lpthread -MMD
+# CXX = g++
+# CXXFLAGS = -Iinclude -O2 -Wall -std=c++11 -fopenmp -lpthread -MMD
+
+CXX = mpic++
+CXXFLAGS = -Iinclude -O2 -Wall -std=c++11 -fopenmp -MMD
 
 SRC = $(wildcard src/*.cc) main.cc
 OBJ = $(SRC:.cc=.o)
